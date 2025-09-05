@@ -18,6 +18,14 @@ if (!process.env.DATABASE_URL) {
   console.log("✅ DATABASE_URL loaded from env.");
 }
 
+function getISTDate() {
+  const now = new Date();
+  // IST is UTC + 5:30
+  now.setHours(now.getHours() + 5);
+  now.setMinutes(now.getMinutes() + 30);
+  return now;
+}
+
 // --- API to schedule a message ---
 // Store messages in DB with a "scheduledAt" and "status" field
 // --- API to schedule a message ---
@@ -59,7 +67,7 @@ app.post("/schedule", async (req, res) => {
 // This will be called by Render Cron every minute
 app.post("/send-pending-messages", async (req, res) => {
   try {
-    const now = new Date();
+    const now = getISTDate();
 
     // 1. Find pending schedulers that are due
     const schedulers = await prisma.scheduler.findMany({
@@ -90,7 +98,7 @@ app.post("/send-pending-messages", async (req, res) => {
           await prisma.conversation.update({
             where: { id: conversation.id },
             data: {
-              lastMessageAt: new Date(),
+              lastMessageAt: getISTDate(),
               messages: { connect: { id: newMessage.id } },
             },
           });
@@ -105,7 +113,7 @@ app.post("/send-pending-messages", async (req, res) => {
       // 3. Update scheduler as sent
       await prisma.scheduler.update({
         where: { id: sched.id },
-        data: { status: "sent", sentAt: new Date() },
+        data: { status: "sent", sentAt: getISTDate() },
       });
     }
 
