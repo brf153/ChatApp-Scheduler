@@ -2,7 +2,6 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const { PrismaClient } = require('@prisma/client');
-const Agenda = require('agenda');
 const cors = require('cors');
 
 dotenv.config();
@@ -12,101 +11,15 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// MongoDB connection for Agenda
-const mongoConnectionString =
-  process.env.DATABASE_URL || 'mongodb://localhost/agenda';
-
-// Debug log (safe)
+// Debug MongoDB string
 if (!process.env.DATABASE_URL) {
   console.warn("⚠️  No DATABASE_URL found, falling back to local MongoDB.");
 } else {
   console.log("✅ DATABASE_URL loaded from env.");
-  // optional: log only prefix to confirm
-  console.log("🔗 MongoDB string starts with:", process.env.DATABASE_URL.split('@')[0]);
 }
 
-// --- Setup Agenda ---
-const agenda = new Agenda({
-  db: { address: mongoConnectionString, collection: 'agendaJobs' },
-  processEvery: '30 seconds', // how often Agenda checks DB
-});
-
-// --- Define Job ---
-agenda.define('send scheduled message', async (job) => {
-  const {
-    receiverIdArray,
-    message,
-    currentUserId,
-    currentUserConversationIds,
-    allUsers,
-  } = job.attrs.data;
-
-  console.log('⚡ Running scheduled job...', job.attrs.data);
-
-  let conversationId = [];
-  for (const id of receiverIdArray) {
-    for (const user of allUsers) {
-      if (user.id === id) {
-        for (const receivedUserConversationId of user.conversationIds) {
-          for (const currentUserConversationId of currentUserConversationIds) {
-            if (receivedUserConversationId === currentUserConversationId) {
-              conversationId.push(currentUserConversationId);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  for (const id of conversationId) {
-    const newMessage = await prisma.message.create({
-      include: {
-        seen: true,
-        sender: true,
-      },
-      data: {
-        body: message,
-        conversation: {
-          connect: { id: id },
-        },
-        sender: {
-          connect: { id: currentUserId },
-        },
-      },
-    });
-
-    await prisma.conversation.update({
-      where: { id: id },
-      data: {
-        lastMessageAt: new Date(),
-        messages: {
-          connect: { id: newMessage.id },
-        },
-      },
-    });
-
-    console.log(`✅ Message sent to conversation ${id}: ${message}`);
-  }
-});
-
-// --- Agenda Lifecycle Logs ---
-agenda.on('start', (job) => {
-  console.log(`➡️  Job started: ${job.attrs.name}`);
-});
-agenda.on('success', (job) => {
-  console.log(`✅ Job success: ${job.attrs.name}`);
-});
-agenda.on('fail', (err, job) => {
-  console.error(`❌ Job failed: ${job.attrs.name}`, err);
-});
-
-// --- Start Agenda ---
-(async function () {
-  await agenda.start();
-  console.log('✅ Agenda started and ready to process jobs.');
-})();
-
-// --- API to schedule a job ---
+// --- API to schedule a message ---
+// Store messages in DB with a "scheduledAt" and "status" field
 app.post('/schedule', async (req, res) => {
   try {
     const {
@@ -124,21 +37,59 @@ app.post('/schedule', async (req, res) => {
 
     const runAt = new Date(datetime);
 
-    // schedule the job
-    await agenda.schedule(runAt, 'send scheduled message', {
-      receiverIdArray,
-      message,
-      currentUserId,
-      currentUserConversationIds,
-      allUsers,
-    });
+    // Save message entries for each receiver
+    for (const id of receiverIdArray) {
+      await prisma.message.create({
+        data: {
+          body: message,
+          sender: { connect: { id: currentUserId } },
+          status: 'pending', // new field to track if sent
+          scheduledAt: runAt,
+          conversation: {
+            connect: {
+              id: currentUserConversationIds.find(cid => 
+                allUsers.find(u => u.id === id)?.conversationIds.includes(cid)
+              ),
+            },
+          },
+        },
+      });
+    }
 
-    console.log(`📅 Job scheduled for ${runAt.toISOString()}`);
-
+    console.log(`📅 Messages scheduled for ${runAt.toISOString()}`);
     res.json({ status: 'scheduled', datetime: runAt, message });
   } catch (err) {
     console.error('❌ Error scheduling message:', err);
     res.status(500).json({ error: 'Failed to schedule message' });
+  }
+});
+
+// --- Endpoint to send pending messages ---
+// This will be called by Render Cron every minute
+app.post('/send-pending-messages', async (req, res) => {
+  try {
+    const now = new Date();
+
+    // Find pending messages whose scheduledAt <= now
+    const messages = await prisma.message.findMany({
+      where: { status: 'pending', scheduledAt: { lte: now } },
+      include: { sender: true, conversation: true },
+    });
+
+    for (const msg of messages) {
+      // Mark as sent
+      await prisma.message.update({
+        where: { id: msg.id },
+        data: { status: 'sent', sentAt: now },
+      });
+
+      console.log(`✅ Message sent: ${msg.body} to conversation ${msg.conversationId}`);
+    }
+
+    res.json({ sentCount: messages.length });
+  } catch (err) {
+    console.error('❌ Error sending pending messages:', err);
+    res.status(500).json({ error: 'Failed to send pending messages' });
   }
 });
 
