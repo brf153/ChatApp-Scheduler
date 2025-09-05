@@ -16,8 +16,19 @@ app.use(cors());
 const mongoConnectionString =
   process.env.DATABASE_URL || 'mongodb://localhost/agenda';
 
+// Debug log (safe)
+if (!process.env.DATABASE_URL) {
+  console.warn("⚠️  No DATABASE_URL found, falling back to local MongoDB.");
+} else {
+  console.log("✅ DATABASE_URL loaded from env.");
+  // optional: log only prefix to confirm
+  console.log("🔗 MongoDB string starts with:", process.env.DATABASE_URL.split('@')[0]);
+}
+
+// --- Setup Agenda ---
 const agenda = new Agenda({
   db: { address: mongoConnectionString, collection: 'agendaJobs' },
+  processEvery: '30 seconds', // how often Agenda checks DB
 });
 
 // --- Define Job ---
@@ -30,7 +41,7 @@ agenda.define('send scheduled message', async (job) => {
     allUsers,
   } = job.attrs.data;
 
-  console.log('Running scheduled job...', job.attrs.data);
+  console.log('⚡ Running scheduled job...', job.attrs.data);
 
   let conversationId = [];
   for (const id of receiverIdArray) {
@@ -74,8 +85,19 @@ agenda.define('send scheduled message', async (job) => {
       },
     });
 
-    console.log(`Message sent to conversation ${id}: ${message}`);
+    console.log(`✅ Message sent to conversation ${id}: ${message}`);
   }
+});
+
+// --- Agenda Lifecycle Logs ---
+agenda.on('start', (job) => {
+  console.log(`➡️  Job started: ${job.attrs.name}`);
+});
+agenda.on('success', (job) => {
+  console.log(`✅ Job success: ${job.attrs.name}`);
+});
+agenda.on('fail', (err, job) => {
+  console.error(`❌ Job failed: ${job.attrs.name}`, err);
 });
 
 // --- Start Agenda ---
@@ -96,7 +118,14 @@ app.post('/schedule', async (req, res) => {
       datetime,
     } = req.body;
 
-    await agenda.schedule(new Date(datetime), 'send scheduled message', {
+    if (!datetime) {
+      return res.status(400).json({ error: 'datetime is required' });
+    }
+
+    const runAt = new Date(datetime);
+
+    // schedule the job
+    await agenda.schedule(runAt, 'send scheduled message', {
       receiverIdArray,
       message,
       currentUserId,
@@ -104,14 +133,16 @@ app.post('/schedule', async (req, res) => {
       allUsers,
     });
 
-    res.json({ status: 'scheduled', datetime, message });
+    console.log(`📅 Job scheduled for ${runAt.toISOString()}`);
+
+    res.json({ status: 'scheduled', datetime: runAt, message });
   } catch (err) {
-    console.error('Error scheduling message:', err);
+    console.error('❌ Error scheduling message:', err);
     res.status(500).json({ error: 'Failed to schedule message' });
   }
 });
 
-// Start server
+// --- Start Express server ---
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () =>
   console.log(`🚀 Scheduler backend running on port ${PORT}`)
