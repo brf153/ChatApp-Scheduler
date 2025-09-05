@@ -40,7 +40,6 @@ app.post("/schedule", async (req, res) => {
     }
 
     const runAt = new Date(datetime);
-    runAt.setMinutes(runAt.getMinutes() - 1); // Schedule 1 min earlier for testing
 
     // Save a new scheduler entry instead of creating messages now
     const sched = await prisma.scheduler.create({
