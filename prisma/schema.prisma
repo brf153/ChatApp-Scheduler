@@ -83,9 +83,14 @@ model Message {
 model Scheduler {
   id          String   @id @default(auto()) @map("_id") @db.ObjectId
   senderId    String   @db.ObjectId
-  receiverId  String[]   @db.ObjectId
+  receiverId  String[] @db.ObjectId
   receiverName String[]
-  createdAt   DateTime @default(now())
-  time        String
+
   message     String
+  status      String   @default("pending")
+  scheduledAt DateTime?
+  sentAt      DateTime?
+
+  createdAt   DateTime @default(now())
 }
+
