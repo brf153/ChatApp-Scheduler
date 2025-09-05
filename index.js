@@ -50,8 +50,8 @@ app.post("/schedule", async (req, res) => {
           .filter((u) => receiverIdArray.includes(u.id))
           .map((u) => u.name || "Unknown"),
         message: message,
-        status: "pending", // <-- add this field in schema
-        scheduledAt: runAt, // <-- add this field in schema
+        status: "pending",
+        scheduledAt: runAt,
       },
     });
 
