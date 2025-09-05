@@ -3,6 +3,7 @@ const express = require("express");
 const dotenv = require("dotenv");
 const { PrismaClient } = require("@prisma/client");
 const cors = require("cors");
+const { pusherServer } = require("./libs/pusher");
 
 dotenv.config();
 
@@ -65,6 +66,7 @@ app.post("/schedule", async (req, res) => {
 
 // --- Endpoint to send pending messages ---
 // This will be called by Render Cron every minute
+
 app.post("/send-pending-messages", async (req, res) => {
   try {
     const now = getISTDate();
@@ -79,7 +81,6 @@ app.post("/send-pending-messages", async (req, res) => {
     for (const sched of schedulers) {
       // 2. Create actual messages in the conversation(s)
       for (const rId of sched.receiverId) {
-        // find the conversation between sender and receiver
         const conversation = await prisma.conversation.findFirst({
           where: {
             userIds: { hasEvery: [sched.senderId, rId] },
@@ -93,7 +94,18 @@ app.post("/send-pending-messages", async (req, res) => {
               conversation: { connect: { id: conversation.id } },
               sender: { connect: { id: sched.senderId } },
             },
+            include: {
+              sender: true,
+              seen: true,
+            },
           });
+
+          // 🔥 Trigger Pusher so frontend updates immediately
+          await pusherServer.trigger(
+            conversation.id,
+            "messages:new",
+            newMessage
+          );
 
           await prisma.conversation.update({
             where: { id: conversation.id },
@@ -104,7 +116,7 @@ app.post("/send-pending-messages", async (req, res) => {
           });
 
           console.log(
-            `✅ Sent message to ${rId} in conversation ${conversation.id}`
+            `✅ Sent + pushed message to ${rId} in conversation ${conversation.id}`
           );
           sentCount++;
         }
@@ -123,6 +135,7 @@ app.post("/send-pending-messages", async (req, res) => {
     res.status(500).json({ error: "Failed to send pending messages" });
   }
 });
+
 
 // --- Start Express server ---
 const PORT = process.env.PORT || 4000;
